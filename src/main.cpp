@@ -10,11 +10,18 @@
 
 MPU6050 mpu(0x68);
 
-BleGamepad bleGamepad;
+BleGamepadConfiguration bleGamepadConfig;
+BleGamepad bleGamepad("Wiimote V2", "Espressif", 100);
 void setup()
 {
-  bleGamepad = BleGamepad();
-  bleGamepad.begin();
+  bleGamepadConfig.setAutoReport(true);
+  bleGamepadConfig.setAxesMin(0);
+  bleGamepadConfig.setAxesMax(255);
+
+  bleGamepad.begin(&bleGamepadConfig);
+
+  bleGamepad.setLeftThumb(127, 127);
+  bleGamepad.setRightThumb(127, 127);
 
   Wire.begin(16, 17);
   Wire.setClock(400000);
@@ -34,39 +41,34 @@ void loop()
 {
   if (bleGamepad.isConnected())
   {
-    int16_t ax, ay, az;
-    int16_t gx, gy, gz;
+    int16_t ax, ay, az, gx, gy, gz;
     mpu.getMotion6(&ax, &ay, &az, &gx, &gy, &gz);
 
-    // --- 1. GYRO (Speed of movement) ---
-    // Offsets applied to keep joysticks at 0 when still
-    int joyLX = map(gx + 930, -8000, 8000, -32767, 32767);
-    int joyLY = map(gy - 480, -8000, 8000, -32767, 32767);
-    int joyRZ = map(gz - 40, -8000, 8000, -32767, 32767);
+    int32_t rawGX = gx + 930;
+    int32_t rawGY = gy - 480;
+    int32_t rawGZ = gz - 40;
 
-    // --- 2. ACCELEROMETER (Absolute Tilt) ---
-    // We use atan2 to turn raw gravity into an angle (Radians to Degrees)
-    // This allows you to know exactly how much you are leaning.
+    if (abs(rawGX) < 250)
+      rawGX = 0;
+    if (abs(rawGY) < 250)
+      rawGY = 0;
+    if (abs(rawGZ) < 250)
+      rawGZ = 0;
+
+    u_int8_t joyLX = map(rawGX, -12000, 12000, 0, 255);
+    u_int8_t joyLY = map(rawGY, -12000, 12000, 0, 255);
+    u_int8_t joyRZ = map(rawGZ, -12000, 12000, 0, 255);
+
     float pitch = atan2(ax, sqrt(pow(ay, 2) + pow(az, 2))) * 57.296;
     float roll = atan2(ay, az) * 57.296;
 
-    // Map angles (-90 to 90 degrees) to the Right Stick Y-axis
-    // This is your JoyRY. It tells Godot the exact lean angle.
-    int joyRY = map(pitch, -90, 90, -32767, 32767);
+    u_int8_t joyPitch = map(constrain(pitch, -90, 90), -90, 90, 0, 255);
+    u_int8_t joyRoll = map(constrain(roll, -90, 90), -90, 90, 0, 255);
 
-    // --- 3. TRIGGER MAPPING ---
-    // Using the Z-axis (up/down) for a trigger.
-    // When flat, az is 16384. When vertical, az is 0.
-    int triggerR = map(az, 0, 16384, 32767, 0);
+    u_int8_t joyYaw = map(rawGZ, -12000, 12000, 0, 255);
 
-    // --- 4. APPLY & SEND ---
-    bleGamepad.setLeftThumb(constrain(joyLX, -32767, 32767),
-                            constrain(joyLY, -32767, 32767));
-
-    bleGamepad.setRightThumb(constrain(joyRZ, -32767, 32767),
-                             constrain(joyRY, -32767, 32767));
-
-    bleGamepad.setRightTrigger(constrain(triggerR, 0, 32767));
+    bleGamepad.setLeftThumb(joyRoll, joyPitch);
+    bleGamepad.setRightThumb(joyRZ, joyYaw);
 
     Serial.print("g/a:\t");
     Serial.print(joyLX);
@@ -74,10 +76,12 @@ void loop()
     Serial.print(joyLY);
     Serial.print("\t");
     Serial.print(joyRZ);
+    Serial.print("\t\t");
+    Serial.print(joyRoll);
     Serial.print("\t");
-    Serial.print(joyRY);
+    Serial.print(joyPitch);
     Serial.print("\t");
-    Serial.print(triggerR);
+    Serial.print(joyYaw);
     Serial.print("\n");
   }
   delay(10);

@@ -37,8 +37,16 @@ void setup()
   delay(100);
 }
 
+float yaw = 0.0f;
+unsigned long lastTime = 0;
+
 void loop()
 {
+  unsigned long currentTime = millis();
+  float dt = (currentTime - lastTime) / 1000.0f;
+  // TODO AHRS filter
+  lastTime = currentTime;
+
   if (bleGamepad.isConnected())
   {
     int16_t ax, ay, az, gx, gy, gz;

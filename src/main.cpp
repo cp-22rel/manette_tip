@@ -12,6 +12,15 @@ MPU6050 mpu(0x68);
 
 BleGamepadConfiguration bleGamepadConfig;
 BleGamepad bleGamepad("Wiimote V2", "Espressif", 100);
+
+const int redPin = 18;
+const int greenPin = 23;
+const int bluePin = 19;
+
+const int redChannel = 0;
+const int greenChannel = 1;
+const int blueChannel = 2;
+
 void setup()
 {
   bleGamepadConfig.setAutoReport(true);
@@ -25,6 +34,16 @@ void setup()
 
   Wire.begin(16, 17);
   Wire.setClock(400000);
+
+  pinMode(21, INPUT_PULLUP);
+
+  ledcSetup(redChannel, 5000, 8);
+  ledcSetup(greenPin, 5000, 8);
+  ledcSetup(blueChannel, 5000, 8);
+
+  ledcAttachPin(redPin, redChannel);
+  ledcAttachPin(greenPin, greenChannel);
+  ledcAttachPin(bluePin, blueChannel);
 
   Serial.begin(111520);
   while (!Serial)
@@ -40,6 +59,10 @@ void setup()
 float yaw = 0.0f;
 unsigned long lastTime = 0;
 
+u_int8_t controllerState = 0;
+
+void reset_led();
+
 void loop()
 {
   unsigned long currentTime = millis();
@@ -49,12 +72,25 @@ void loop()
 
   if (bleGamepad.isConnected())
   {
+    if (controllerState == 0)
+    {
+      controllerState == 1;
+      reset_led();
+      ledcWrite(blueChannel, 255);
+      delay(500);
+    }
+    controllerState = 2;
+
+    bool buttonState = digitalRead(21) == LOW;
+
     int16_t ax, ay, az, gx, gy, gz;
     mpu.getMotion6(&ax, &ay, &az, &gx, &gy, &gz);
 
     int32_t rawGX = gx + 930;
     int32_t rawGY = gy - 480;
     int32_t rawGZ = gz - 40;
+
+    float gyroZrate = (gz - 40) / 131.0f;
 
     if (abs(rawGX) < 250)
       rawGX = 0;
@@ -68,17 +104,35 @@ void loop()
     u_int8_t joyRZ = map(rawGZ, -12000, 12000, 0, 255);
 
     float pitch = atan2(ax, sqrt(pow(ay, 2) + pow(az, 2))) * 57.296;
+    // float pitch = atan2(-ax, sqrt(pow(ax, 2) + pow(az, 2)));
     float roll = atan2(ay, az) * 57.296;
+    // float roll = atan2(-ax, az);
+
+    yaw = (yaw + gyroZrate * dt) * 0.999f;
 
     u_int8_t joyPitch = map(constrain(pitch, -90, 90), -90, 90, 0, 255);
     u_int8_t joyRoll = map(constrain(roll, -90, 90), -90, 90, 0, 255);
-
-    u_int8_t joyYaw = map(rawGZ, -12000, 12000, 0, 255);
+    u_int8_t joyYaw = map(constrain(yaw, -180, 180), -180, 180, 0, 255);
 
     bleGamepad.setLeftThumb(joyRoll, joyPitch);
-    bleGamepad.setRightThumb(joyRZ, joyYaw);
+    bleGamepad.setRightThumb(joyYaw, 128);
 
-    Serial.print("g/a:\t");
+    if (buttonState)
+    {
+      yaw = 0.0f;
+      controllerState = 4;
+      bleGamepad.press(BUTTON_5);
+    }
+    else
+    {
+      bleGamepad.release(BUTTON_5);
+    }
+
+    Serial.print("State/Button/G/RPY:\t");
+    Serial.print(controllerState);
+    Serial.print("\t\t");
+    Serial.print(buttonState);
+    Serial.print("\t\t");
     Serial.print(joyLX);
     Serial.print("\t");
     Serial.print(joyLY);
@@ -92,5 +146,46 @@ void loop()
     Serial.print(joyYaw);
     Serial.print("\n");
   }
+  else
+  {
+    controllerState = 0;
+  }
+
+  if (controllerState == 0)
+  {
+    reset_led();
+    ledcWrite(redChannel, 255);
+  }
+  else if (controllerState == 1)
+  {
+    reset_led();
+    ledcWrite(blueChannel, 255);
+  }
+  else if (controllerState == 2)
+  {
+    reset_led();
+    ledcWrite(greenChannel, 255);
+  }
+  else if (controllerState == 3)
+  {
+    reset_led();
+    delay(500);
+    ledcWrite(redChannel, 255);
+    delay(500);
+  }
+  else if (controllerState == 4)
+  {
+    reset_led();
+    ledcWrite(redChannel, 128);
+    ledcWrite(blueChannel, 128);
+  }
+
   delay(10);
+}
+
+void reset_led()
+{
+  ledcWrite(redChannel, 0);
+  ledcWrite(greenChannel, 0);
+  ledcWrite(blueChannel, 0);
 }

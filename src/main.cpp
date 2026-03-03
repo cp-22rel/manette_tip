@@ -61,6 +61,8 @@ float yaw = 0.0f;
 unsigned long lastTime = 0;
 
 u_int8_t controllerState = 0;
+bool resetButtonPressed = false;
+bool lastResetButtonState = false;
 
 void reset_led();
 
@@ -81,8 +83,8 @@ void loop()
       delay(500);
     }
     controllerState = 2;
-
-    bool resetButtonPressed = digitalRead(21) == LOW;
+    lastResetButtonState = resetButtonPressed;
+    resetButtonPressed = digitalRead(21) == LOW;
     bool actionButtonPressed = digitalRead(13) == LOW;
 
     int16_t ax, ay, az, gx, gy, gz;
@@ -121,12 +123,15 @@ void loop()
 
     if (resetButtonPressed)
     {
-      yaw = 0.0f;
       controllerState = 4;
       bleGamepad.press(BUTTON_5);
     }
     else
     {
+      if (lastResetButtonState)
+      {
+        yaw = 0.0f;
+      }
       bleGamepad.release(BUTTON_5);
     }
 

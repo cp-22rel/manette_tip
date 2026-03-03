@@ -11,7 +11,7 @@
 MPU6050 mpu(0x68);
 
 BleGamepadConfiguration bleGamepadConfig;
-BleGamepad bleGamepad("Wiimote V2", "Espressif", 100);
+BleGamepad bleGamepad("Wiimote V2", "Espressif", 67);
 
 const int redPin = 18;
 const int greenPin = 23;
@@ -36,6 +36,7 @@ void setup()
   Wire.setClock(400000);
 
   pinMode(21, INPUT_PULLUP);
+  pinMode(13, INPUT_PULLUP);
 
   ledcSetup(redChannel, 5000, 8);
   ledcSetup(greenPin, 5000, 8);
@@ -81,7 +82,8 @@ void loop()
     }
     controllerState = 2;
 
-    bool buttonState = digitalRead(21) == LOW;
+    bool resetButtonPressed = digitalRead(21) == LOW;
+    bool actionButtonPressed = digitalRead(13) == LOW;
 
     int16_t ax, ay, az, gx, gy, gz;
     mpu.getMotion6(&ax, &ay, &az, &gx, &gy, &gz);
@@ -117,7 +119,7 @@ void loop()
     bleGamepad.setLeftThumb(joyRoll, joyPitch);
     bleGamepad.setRightThumb(joyYaw, 128);
 
-    if (buttonState)
+    if (resetButtonPressed)
     {
       yaw = 0.0f;
       controllerState = 4;
@@ -128,10 +130,21 @@ void loop()
       bleGamepad.release(BUTTON_5);
     }
 
-    Serial.print("State/Button/G/RPY:\t");
+    if (actionButtonPressed)
+    {
+      bleGamepad.press(BUTTON_1);
+    }
+    else
+    {
+      bleGamepad.release(BUTTON_1);
+    }
+
+    Serial.print("State/Buttons/G/RPY:\t");
     Serial.print(controllerState);
     Serial.print("\t\t");
-    Serial.print(buttonState);
+    Serial.print(resetButtonPressed);
+    Serial.print("\t");
+    Serial.print(actionButtonPressed);
     Serial.print("\t\t");
     Serial.print(joyLX);
     Serial.print("\t");

@@ -83,7 +83,7 @@ void loop()
       delay(500);
     }
     controllerState = 2;
-    lastResetButtonState = resetButtonPressed;
+
     resetButtonPressed = digitalRead(21) == LOW;
     bool actionButtonPressed = digitalRead(13) == LOW;
 
@@ -95,6 +95,8 @@ void loop()
     int32_t rawGZ = gz - 40;
 
     float gyroZrate = (gz - 40) / 131.0f;
+    float gyroXrate = (gx + 930) / 131.0f;
+    float gyroYrate = (gy - 480) / 131.0f;
 
     if (abs(rawGX) < 250)
       rawGX = 0;
@@ -107,10 +109,8 @@ void loop()
     u_int8_t joyLY = map(rawGY, -12000, 12000, 0, 255);
     u_int8_t joyRZ = map(rawGZ, -12000, 12000, 0, 255);
 
-    float pitch = atan2(ax, sqrt(pow(ay, 2) + pow(az, 2))) * 57.296;
-    // float pitch = atan2(-ax, sqrt(pow(ax, 2) + pow(az, 2)));
-    float roll = atan2(ay, az) * 57.296;
-    // float roll = atan2(-ax, az);
+    float pitch = atan2(ay, sqrt(pow(ax, 2) + pow(az, 2))) * 57.296;
+    float roll = atan2(ax, sqrt(pow(ay, 2) + pow(az, 2))) * 57.296;
 
     yaw = (yaw + gyroZrate * dt) * 0.999f;
 
@@ -121,27 +121,40 @@ void loop()
     bleGamepad.setLeftThumb(joyRoll, joyPitch);
     bleGamepad.setRightThumb(joyYaw, 128);
 
-    if (resetButtonPressed)
+    if ((!resetButtonPressed || !actionButtonPressed) && lastResetButtonState)
     {
+      lastResetButtonState = false;
+      yaw = 0.0f;
       controllerState = 4;
+    }
+    else if (resetButtonPressed && actionButtonPressed)
+    {
+      lastResetButtonState = true;
       bleGamepad.press(BUTTON_5);
-    }
-    else
-    {
-      if (lastResetButtonState)
-      {
-        yaw = 0.0f;
-      }
-      bleGamepad.release(BUTTON_5);
-    }
-
-    if (actionButtonPressed)
-    {
-      bleGamepad.press(BUTTON_1);
-    }
-    else
-    {
       bleGamepad.release(BUTTON_1);
+      bleGamepad.release(BUTTON_2);
+    }
+    else
+    {
+      bleGamepad.release(BUTTON_5);
+
+      if (resetButtonPressed)
+      {
+        bleGamepad.press(BUTTON_2);
+      }
+      else
+      {
+        bleGamepad.release(BUTTON_2);
+      }
+
+      if (actionButtonPressed)
+      {
+        bleGamepad.press(BUTTON_1);
+      }
+      else
+      {
+        bleGamepad.release(BUTTON_1);
+      }
     }
 
     Serial.print("State/Buttons/G/RPY:\t");
@@ -196,6 +209,7 @@ void loop()
     reset_led();
     ledcWrite(redChannel, 128);
     ledcWrite(blueChannel, 128);
+    delay(100);
   }
 
   delay(10);

@@ -13,6 +13,8 @@ MPU6050 mpu(0x68);
 BleGamepadConfiguration bleGamepadConfig;
 BleGamepad bleGamepad("Wiimote V2", "Espressif", 67);
 
+const bool debug = true;
+
 const int redPin = 18;
 const int greenPin = 23;
 const int bluePin = 19;
@@ -27,6 +29,11 @@ float offset_az = 0.0f;
 
 float gravity = 8192.0f;
 
+void reset_led();
+void handle_gamepad_led_state();
+double moving_average(double avg, double newSample, double n);
+
+// SETUP -------------------------------------
 void setup()
 {
   bleGamepadConfig.setAutoReport(true);
@@ -64,10 +71,11 @@ void setup()
 
   delay(100);
 
-  Serial.println("Calibrating IMU... DO NOT MOVE CONTROLLER");
+  Serial.println("\nCalibrating MPU... DO NOT MOVE CONTROLLER!");
 
   long sum_ax = 0, sum_ay = 0, sum_az = 0;
-  for (int i = 0; i < 500; i++)
+  int cycles = 200;
+  for (int i = 0; i < cycles; i++)
   {
     int16_t c_ax, c_ay, c_az, c_gx, c_gy, c_gz;
 
@@ -78,17 +86,18 @@ void setup()
     delay(4);
   }
 
-  offset_ax = sum_ax / 500.0f;
-  offset_ay = sum_ay / 500.0f;
-  offset_az = (sum_az / 500.0f) - 8192.0f;
+  offset_ax = sum_ax / cycles;
+  offset_ay = sum_ay / cycles;
+  offset_az = (sum_az / cycles) - gravity;
 
   Serial.println("Calibration complete!");
 }
 
+// LOOP VARIABLE -------------------------------
+
 float yaw = 0.0f;
-float last_roll = 0.0f;
-float last_pitch = 0.0f;
-float filtered_az = 0.0f;
+float acc_saved_roll = 0.0f;
+float acc_saved_picht = 0.0f;
 
 float vel_x = 0, vel_y = 0, vel_z = 0;
 float pos_x = 0, pos_y = 0, pos_z = 0;
@@ -99,21 +108,15 @@ u_int8_t controllerState = 0;
 bool resetButtonPressed = false;
 bool lastResetButtonState = false;
 
-const float ACCEL_TOLERANCE = 600.0f;
-const float GYRO_TOLERANCE = 50.0f;
+double pitch_avg = 0;
+double roll_avg = 0;
 
-float fused_pitch = 0.0f;
-float fused_roll = 0.0f;
-
-const float alpha = 0.2;
-
-void reset_led();
-
+// LOOP ----------------------------------------
 void loop()
 {
   unsigned long currentTime = millis();
   float dt = (currentTime - lastTime) / 1000.0f;
-  // TODO AHRS filter
+
   lastTime = currentTime;
 
   if (bleGamepad.isConnected())
@@ -141,11 +144,9 @@ void loop()
     int32_t rawAY = ay - offset_ay;
     int32_t rawAZ = az - offset_az;
 
-    ax = rawAX;
-    ay = rawAY;
-    az = rawAZ;
-
     float gyroZrate = (gz - 40) / 131.0f;
+    float gyroYrate = (gy - 480) / 131.0f;
+    float gyroXrate = (gx + 930) / 131.0f;
 
     if (abs(rawGX) < 250)
       rawGX = 0;
@@ -158,60 +159,72 @@ void loop()
     u_int8_t joyLY = map(rawGY, -12000, 12000, 0, 255);
     u_int8_t joyRZ = map(rawGZ, -12000, 12000, 0, 255);
 
-    // float pitch = atan2(ay, sqrt(pow(ax, 2) + pow(az, 2))) * 57.296;
-    // float roll = atan2(ax, sqrt(pow(ay, 2) + pow(az, 2))) * 57.296;
-
     float pitch = atan2(-ax, sqrt(ay * ay + az * az)) * 57.296;
     float roll = atan2(ay, az) * 57.296;
 
     yaw = (yaw + gyroZrate * dt) * 0.999f;
 
-    float gyroXrate = rawGX / 131.0f;
-    float gyroYrate = rawGY / 131.0f;
-
     // Acceleration Positionning
 
-    float ax_g = ax / 8192.0f;
-    float ay_g = ay / 8192.0f;
-    float az_g = az / 8192.0f;
+    float ax_g = ax / gravity;
+    float ay_g = ay / gravity;
+    float az_g = az / gravity;
 
     float pitch_for_acc = atan2(-ax_g, sqrt(ay_g * ay_g + az_g * az_g));
     float roll_for_acc = atan2(ay_g, az_g);
 
-    float linear_ax = ax_g - (1 * -sin(pitch_for_acc));
-    float linear_ay = ay_g - (1 * cos(pitch_for_acc) * sin(roll_for_acc));
-    float linear_az = az_g - (1 * cos(pitch_for_acc) * cos(roll_for_acc));
+    pitch_avg = moving_average(pitch_avg, pitch_for_acc, 3);
+    roll_avg = moving_average(roll_avg, roll_for_acc, 3);
 
-    linear_ax = (abs(linear_ax) > 0.02) * linear_ax;
-    linear_ay = (abs(linear_ay) > 0.02) * linear_ay;
-    linear_az = (abs(linear_az) > 0.02) * linear_az;
+    pitch_for_acc = pitch_avg;
+    roll_for_acc = roll_avg;
 
-    linear_ax *= 10;
-    linear_ay *= 10;
+    float alpha = 0.01;
 
-    float angular_velocity_x = last_pitch - pitch;
-    float angular_velocity_y = last_roll - roll;
+    acc_saved_picht = alpha * (acc_saved_picht + gyroXrate * dt) + (1 - alpha) * pitch_for_acc;
+    acc_saved_roll = alpha * (acc_saved_roll + gyroYrate * dt) + (1 - alpha) * roll_for_acc;
 
-    last_pitch = pitch;
-    last_roll = roll;
+    pitch_for_acc = acc_saved_picht;
+    roll_for_acc = acc_saved_roll;
 
-    float range = 10.0f;
+    float gravity_x = gravity * -sin(pitch_for_acc);
+    float gravity_y = gravity * cos(pitch_for_acc) * sin(roll_for_acc);
+    float gravity_z = gravity * cos(pitch_for_acc) * cos(roll_for_acc);
 
-    vel_x += linear_ax * dt * 10;
-    vel_y += linear_ay * dt * 10;
-    vel_z += linear_az * dt * 10;
+    float linear_ax = ax - gravity_x;
+    float linear_ay = ay - gravity_y;
+    float linear_az = az - gravity_z - 700;
 
-    vel_x = vel_x * 0.55;
-    vel_y = vel_y * 0.55;
-    vel_z = vel_z * 0.55;
+    linear_ax = (abs(linear_ax) > 50) * linear_ax;
+    linear_ay = (abs(linear_ay) > 50) * linear_ay;
+    linear_az = (abs(linear_az) > 50) * linear_az;
+
+    float range = 400.0f;
+    float velocityLimit = 200;
+
+    vel_x = constrain(vel_x + linear_ax * dt, -velocityLimit, velocityLimit);
+    vel_y = constrain(vel_y + linear_ay * dt, -velocityLimit, velocityLimit);
+    vel_z = constrain(vel_z + linear_az * dt, -velocityLimit, velocityLimit);
+
+    vel_x = (abs(vel_x) > 9) * vel_x;
+    vel_y = (abs(vel_y) > 9) * vel_y;
+    vel_z = (abs(vel_z) > 9) * vel_z;
 
     pos_x = constrain(pos_x + vel_x, -range, range);
     pos_y = constrain(pos_y + vel_y, -range, range);
     pos_z = constrain(pos_z + vel_z, -range, range);
 
-    u_int8_t joyPosX = map(constrain(pos_x, -range, range), -range, range, 0, 255);
-    u_int8_t joyPosY = map(constrain(pos_y, -range, range), -range, range, 0, 255);
-    u_int8_t joyPosZ = map(constrain(pos_z, -range, range), -range, range, 0, 255);
+    vel_x = vel_x * 0.4;
+    vel_y = vel_y * 0.4;
+    vel_z = vel_z * 0.4;
+
+    pos_x = pos_x * 0.8;
+    pos_y = pos_y * 0.8;
+    pos_z = pos_z * 0.8;
+
+    u_int8_t joyPosX = map(pos_x, -range, range, 0, 255);
+    u_int8_t joyPosY = map(pos_y, -range, range, 0, 255);
+    u_int8_t joyPosZ = map(pos_z, -range, range, 0, 255);
 
     u_int8_t joyPitch = map(constrain(pitch, -90, 90), -90, 90, 0, 255);
     u_int8_t joyRoll = map(constrain(roll, -90, 90), -90, 90, 0, 255);
@@ -263,38 +276,104 @@ void loop()
         bleGamepad.release(BUTTON_1);
       }
     }
-
-    Serial.print("State/Buttons/G/RPY/Pos:\t");
-    Serial.print(controllerState);
-    Serial.print("\t\t");
-    Serial.print(resetButtonPressed);
-    Serial.print("\t");
-    Serial.print(actionButtonPressed);
-    Serial.print("\t\t");
-    Serial.print(joyLX);
-    Serial.print("\t");
-    Serial.print(joyLY);
-    Serial.print("\t");
-    Serial.print(joyRZ);
-    Serial.print("\t\t");
-    Serial.print(joyRoll);
-    Serial.print("\t");
-    Serial.print(joyPitch);
-    Serial.print("\t");
-    Serial.print(joyYaw);
-    Serial.print("\t\t");
-    Serial.print(joyPosX);
-    Serial.print("\t");
-    Serial.print(joyPosY);
-    Serial.print("\t");
-    Serial.print(joyPosZ);
-    Serial.print("\n");
+    if (debug)
+    {
+      Serial.print(">");
+      Serial.print("state:");
+      Serial.print(controllerState);
+      Serial.print(",");
+      Serial.print("reset_btn:");
+      Serial.print(resetButtonPressed);
+      Serial.print(",");
+      Serial.print("action_btn:");
+      Serial.print(actionButtonPressed);
+      Serial.print(",");
+      Serial.print("gx:");
+      Serial.print(joyLX);
+      Serial.print(",");
+      Serial.print("gy:");
+      Serial.print(joyLY);
+      Serial.print(",");
+      Serial.print("gz:");
+      Serial.print(joyRZ);
+      Serial.print(",");
+      Serial.print("roll:");
+      Serial.print(joyRoll);
+      Serial.print(",");
+      Serial.print("pitch:");
+      Serial.print(joyPitch);
+      Serial.print(",");
+      Serial.print("yaw:");
+      Serial.print(joyYaw);
+      Serial.print(",");
+      Serial.print("pos_x:");
+      Serial.print(pos_x);
+      Serial.print(",");
+      Serial.print("pos_y:");
+      Serial.print(pos_y);
+      Serial.print(",");
+      Serial.print("pos_z:");
+      Serial.print(pos_z);
+      Serial.print(",");
+      Serial.print("gx:");
+      Serial.print(rawGX);
+      Serial.print(",");
+      Serial.print("gy:");
+      Serial.print(rawGY);
+      Serial.print(",");
+      Serial.print("gz:");
+      Serial.print(rawGZ);
+      Serial.print(",");
+      Serial.print("vel_x:");
+      Serial.print(vel_x);
+      Serial.print(",");
+      Serial.print("vel_y:");
+      Serial.print(vel_y);
+      Serial.print(",");
+      Serial.print("vel_z:");
+      Serial.print(vel_z);
+      Serial.print(",");
+      Serial.print("gravity_x:");
+      Serial.print(gravity_x);
+      Serial.print(",");
+      Serial.print("gravity_y:");
+      Serial.print(gravity_y);
+      Serial.print(",");
+      Serial.print("gravity_z:");
+      Serial.print(gravity_z);
+      Serial.print(",");
+      Serial.print("linear_ax:");
+      Serial.print(linear_ax);
+      Serial.print(",");
+      Serial.print("linear_ay:");
+      Serial.print(linear_ay);
+      Serial.print(",");
+      Serial.print("linear_az:");
+      Serial.print(linear_az);
+      Serial.print("\r\n");
+    }
   }
   else
   {
     controllerState = 0;
   }
 
+  handle_gamepad_led_state();
+
+  delay(10);
+}
+
+// METHODS------------------------------
+
+void reset_led()
+{
+  ledcWrite(redChannel, 0);
+  ledcWrite(greenChannel, 0);
+  ledcWrite(blueChannel, 0);
+}
+
+void handle_gamepad_led_state()
+{
   if (controllerState == 0)
   {
     reset_led();
@@ -324,13 +403,11 @@ void loop()
     ledcWrite(blueChannel, 128);
     delay(100);
   }
-
-  delay(10);
 }
 
-void reset_led()
+double moving_average(double avg, double newSample, double n)
 {
-  ledcWrite(redChannel, 0);
-  ledcWrite(greenChannel, 0);
-  ledcWrite(blueChannel, 0);
+  avg -= avg / n;
+  avg += newSample / n;
+  return avg;
 }

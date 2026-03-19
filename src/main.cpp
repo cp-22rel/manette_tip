@@ -14,7 +14,7 @@ MPU6050 mpu(0x68);
 BleGamepadConfiguration bleGamepadConfig;
 BleGamepad bleGamepad("Wiimote V2", "Espressif", 67);
 
-const bool debug = true;
+const bool debug = false;
 
 const int redPin = 18;
 const int greenPin = 23;

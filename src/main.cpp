@@ -1,4 +1,5 @@
 #include <Arduino.h>
+#include <driver/rtc_io.h>
 #include <BLEGamepad.h>
 #include <Wire.h>
 
@@ -59,6 +60,9 @@ void setup()
   ledcAttachPin(greenPin, greenChannel);
   ledcAttachPin(bluePin, blueChannel);
 
+  uint64_t mask = 1ULL << GPIO_NUM_13;
+  esp_sleep_enable_ext0_wakeup(GPIO_NUM_13, 0);
+
   Serial.begin(111520);
   while (!Serial)
   {
@@ -111,6 +115,9 @@ bool lastResetButtonState = false;
 double pitch_avg = 0;
 double roll_avg = 0;
 
+float unconnected_time = 0;
+const float time_until_deep_sleep = 10;
+
 // LOOP ----------------------------------------
 void loop()
 {
@@ -121,6 +128,8 @@ void loop()
 
   if (bleGamepad.isConnected())
   {
+    unconnected_time = 0;
+
     if (controllerState == 0)
     {
       controllerState == 1;
@@ -355,7 +364,13 @@ void loop()
   }
   else
   {
+    unconnected_time += dt;
     controllerState = 0;
+
+    if (unconnected_time >= time_until_deep_sleep)
+    {
+      esp_deep_sleep_start();
+    }
   }
 
   handle_gamepad_led_state();
